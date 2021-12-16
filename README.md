@@ -1,0 +1,2 @@
+# Doge-DumpMem
+dump lsass

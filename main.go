@@ -125,7 +125,7 @@ func main(){
 
 /*
 
-	NtQueryInformationThread, e := gabh.NtdllHgate("777e1962aa30c83ccb29874bb58c03b76f81e346",str2sha1)
+	NtQueryInformationThread, e := gabh.DiskHgate("777e1962aa30c83ccb29874bb58c03b76f81e346",str2sha1)
 	//NtQueryInformationThread,_,e := ReMapNtdll.GetFuncUnhook("777e1962aa30c83ccb29874bb58c03b76f81e346",str2sha1)
 	if e != nil{
 		panic(e)
@@ -162,7 +162,7 @@ func main(){
 
 
 
-	NtProtectVirtualMemory, e := gabh.NtdllHgate("059637f5757d91ad1bc91215f73ab6037db6fe59",str2sha1)
+	NtProtectVirtualMemory, e := gabh.DiskHgate("059637f5757d91ad1bc91215f73ab6037db6fe59",str2sha1)
 	//NtProtectVirtualMemory,_,e := ReMapNtdll.GetFuncUnhook("059637f5757d91ad1bc91215f73ab6037db6fe59",str2sha1)
 	if e != nil{
 		panic(e)
@@ -195,7 +195,7 @@ func main(){
 	// After hook
 
 
-	NtReadVirtualMemory, e := gabh.NtdllHgate("ee680bb3dc4f47d1e3a14538f25a98899974d0dc",str2sha1)
+	NtReadVirtualMemory, e := gabh.DiskHgate("ee680bb3dc4f47d1e3a14538f25a98899974d0dc",str2sha1)
 	//NtReadVirtualMemory,_,e := ReMapNtdll.GetFuncUnhook("ee680bb3dc4f47d1e3a14538f25a98899974d0dc",str2sha1)
 	if e != nil{
 		panic(e)

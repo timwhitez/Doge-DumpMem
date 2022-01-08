@@ -10,7 +10,7 @@ require (
 )
 
 require (
-	github.com/Binject/debug v0.0.0-20210312092933-6277045c2fdf // indirect
+	github.com/Binject/debug v0.0.0-20211007083345-9605c99179ee // indirect
 	github.com/awgh/rawreader v0.0.0-20200626064944-56820a9c6da4 // indirect
 	github.com/pkg/errors v0.8.0 // indirect
 	golang.org/x/arch v0.0.0-20191126211547-368ea8f32fff // indirect

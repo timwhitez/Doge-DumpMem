@@ -153,7 +153,7 @@ func main() {
 	dump, _ := minidump(uint32(pid), windows.Handle(currentSnapshotProcess))
 
 	if dump != nil {
-		ioutil.WriteFile(string(time.Now().UnixMilli())+".dmp", dump, 0644)
+		ioutil.WriteFile(strconv.Itoa(int(time.Now().UnixMilli()))+".dmp", dump, 0644)
 	}
 
 	syscall.Syscall(uintptr(ZwClose), 1, currentSnapshotProcess, 0, 0)

